@@ -41,6 +41,10 @@ public enum MQTTError: Error {
     case connectionError(ConnectionReturnValue)
     /// We received an unsuccessful return value from either a connect or publish
     case reasonError(MQTTReasonCode)
+    /// We received an unsuccessful acknowledgement for a publish. Unlike `reasonError`
+    /// this carries the full ACK, because MQTT v5 brokers may attach application-level
+    /// detail (user properties, reason string) that the caller needs to recover.
+    case reasonErrorWithAck(MQTTAckV5)
     /// client in not connected
     case noConnection
     /// the server disconnected

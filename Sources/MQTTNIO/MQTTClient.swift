@@ -718,7 +718,7 @@ extension MQTTClient {
             }
             if let pubAckPacket = message as? MQTTPubAckPacket {
                 if pubAckPacket.reason.rawValue > 0x7F {
-                    throw MQTTError.reasonError(pubAckPacket.reason)
+                    throw MQTTError.reasonErrorWithAck(MQTTAckV5(reason: pubAckPacket.reason, properties: pubAckPacket.properties))
                 }
             }
             return true
@@ -756,7 +756,7 @@ extension MQTTClient {
             }
             if let pubAckPacket = message as? MQTTPubAckPacket {
                 if pubAckPacket.reason.rawValue > 0x7F {
-                    throw MQTTError.reasonError(pubAckPacket.reason)
+                    throw MQTTError.reasonErrorWithAck(MQTTAckV5(reason: pubAckPacket.reason, properties: pubAckPacket.properties))
                 }
             }
             return true
