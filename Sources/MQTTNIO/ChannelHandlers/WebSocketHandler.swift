@@ -153,6 +153,12 @@ final class WebSocketHandler: ChannelDuplexHandler {
 
     private func receivedClose(context: ChannelHandlerContext, frame: WebSocketFrame) {
         // Handle a received close frame. We're just going to close.
+        // Tell the rest of the pipeline who closed and why: the code is the only hint a server or
+        // a proxy gives (1009 "message too big", 1008 "policy violation", ...).
+        var data = frame.unmaskedData
+        let code = data.readWebSocketErrorCode()
+        let reason = data.readString(length: data.readableBytes) ?? ""
+        context.fireUserInboundEventTriggered(WebSocketPeerClose(code: code, reason: reason))
         self.isClosed = true
         context.close(promise: nil)
     }
@@ -207,6 +213,12 @@ final class WebSocketHandler: ChannelDuplexHandler {
     }
 
     private var isClosed: Bool = false
+}
+
+/// Close frame received from the WebSocket peer.
+struct WebSocketPeerClose {
+    let code: WebSocketErrorCode?
+    let reason: String
 }
 
 struct WebSocketFrameSequence {

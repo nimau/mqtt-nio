@@ -28,3 +28,7 @@ mistaken for upstream's. Consumers pin with `exact:`, since every fork release i
 2. Channel errors are logged: the last handler of the pipeline logs every error it catches (a WebSocket
    frame over the size limit, a packet that cannot be decoded, a DISCONNECT from the server). The close
    listeners only get the channel's close future, which succeeds whatever the cause. (`2.13.0-fork.2`)
+3. The cause of a closed connection is logged: "Network connection closed" carries `mqtt_close_cause`
+   (an error caught on the channel, a WebSocket close frame from the peer with its code and reason, a
+   drop by the peer or the network, or a close asked by the client) and is a warning unless the
+   client asked for the close. (`2.13.0-fork.3`)

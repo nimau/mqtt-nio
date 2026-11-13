@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Atomics
 import NIO
 import NIOHTTP1
 import NIOWebSocket
@@ -33,6 +34,7 @@ final class MQTTConnection {
     let cleanSession: Bool
     let timeout: TimeAmount?
     let taskHandler: MQTTTaskHandler
+    private let closedLocally = ManagedAtomic(false)
 
     private init(channel: Channel, cleanSession: Bool, timeout: TimeAmount?, taskHandler: MQTTTaskHandler) {
         self.channel = channel
@@ -202,6 +204,7 @@ final class MQTTConnection {
     }
 
     func close() -> EventLoopFuture<Void> {
+        self.closedLocally.store(true, ordering: .relaxed)
         if self.channel.isActive {
             return self.channel.close()
         } else {
@@ -229,4 +232,47 @@ final class MQTTConnection {
     }
 
     var closeFuture: EventLoopFuture<Void> { self.channel.closeFuture }
+
+    /// Why the connection closed. Only meaningful once `closeFuture` has completed, and must be
+    /// read on the channel's event loop.
+    var closeCause: CloseCause {
+        if let error = self.taskHandler.lastError {
+            return .error(error)
+        }
+        if let peerClose = self.taskHandler.peerClose {
+            return .webSocketClosedByPeer(peerClose)
+        }
+        return self.closedLocally.load(ordering: .relaxed) ? .closedLocally : .closedByPeer
+    }
+
+    enum CloseCause: CustomStringConvertible {
+        /// The client closed the connection (disconnect, shutdown).
+        case closedLocally
+        /// An error was caught on the channel: a WebSocket frame over the size limit, a packet that
+        /// cannot be decoded, a DISCONNECT from the server.
+        case error(Error)
+        /// The server, or a proxy in front of it, sent a WebSocket close frame.
+        case webSocketClosedByPeer(WebSocketPeerClose)
+        /// The connection went down with no error and no close frame: the peer or the network dropped it.
+        case closedByPeer
+
+        var isExpected: Bool {
+            if case .closedLocally = self { return true }
+            return false
+        }
+
+        var description: String {
+            switch self {
+            case .closedLocally:
+                return "closed by the client"
+            case .error(let error):
+                return "error: \(error)"
+            case .webSocketClosedByPeer(let close):
+                let code = close.code.map { "\(UInt16(webSocketErrorCode: $0))" } ?? "none"
+                return close.reason.isEmpty ? "WebSocket closed by peer, code \(code)" : "WebSocket closed by peer, code \(code), reason: \(close.reason)"
+            case .closedByPeer:
+                return "closed by the peer or the network, no error and no WebSocket close frame"
+            }
+        }
+    }
 }

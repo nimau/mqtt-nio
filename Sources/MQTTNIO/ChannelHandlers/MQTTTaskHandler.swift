@@ -119,10 +119,26 @@ final class MQTTTaskHandler: ChannelInboundHandler, RemovableChannelHandler {
         // listeners only get the channel's close future, which succeeds whatever the cause, so this
         // log line is the only place the cause of a dropped connection is reported.
         self.client.logger.error("MQTT channel error", metadata: ["mqtt_error": .string("\(error)")])
+        // Keep the first cause only: an error caught after the peer's close frame (a write on the
+        // channel being closed) is a consequence of that close, not the reason for it.
+        if self.lastError == nil, self.peerClose == nil {
+            self.lastError = error
+        }
         // we caught an error so we should fail all active tasks
         self.tasks.forEach { $0.fail(error) }
         self.tasks.removeAll()
     }
 
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if let peerClose = event as? WebSocketPeerClose {
+            self.peerClose = peerClose
+        }
+        context.fireUserInboundEventTriggered(event)
+    }
+
     var tasks: [MQTTTask]
+    /// First error caught on the channel, kept to report why the connection closed.
+    private(set) var lastError: Error?
+    /// Close frame received from the WebSocket peer, kept to report why the connection closed.
+    private(set) var peerClose: WebSocketPeerClose?
 }

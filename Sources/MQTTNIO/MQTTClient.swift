@@ -499,7 +499,15 @@ extension MQTTClient {
                     if self.connection === connection {
                         self.connection = nil
                     }
-                    self.logger.debug("Network connection closed")
+                    // The close listeners only get the channel's close future, which succeeds whatever
+                    // the cause, so the cause is reported here. Anything but a close asked by the
+                    // client is a warning, to show up in production logs.
+                    let cause = connection.closeCause
+                    self.logger.log(
+                        level: cause.isExpected ? .debug : .warning,
+                        "Network connection closed",
+                        metadata: ["mqtt_close_cause": .string(cause.description)]
+                    )
                     self.closeListeners.notify(result)
                 }
                 self.logger.debug("Network connection established")
