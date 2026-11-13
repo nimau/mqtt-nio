@@ -114,6 +114,11 @@ final class MQTTTaskHandler: ChannelInboundHandler, RemovableChannelHandler {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
+        // Last handler of the pipeline, so every channel error ends up here: a WebSocket frame over
+        // the size limit, a packet that cannot be decoded, a DISCONNECT from the server. The close
+        // listeners only get the channel's close future, which succeeds whatever the cause, so this
+        // log line is the only place the cause of a dropped connection is reported.
+        self.client.logger.error("MQTT channel error", metadata: ["mqtt_error": .string("\(error)")])
         // we caught an error so we should fail all active tasks
         self.tasks.forEach { $0.fail(error) }
         self.tasks.removeAll()
