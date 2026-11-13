@@ -59,6 +59,13 @@ final class MQTTConnection {
                 .channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value: 1)
                 .connectTimeout(client.configuration.connectTimeout)
                 .channelInitializer { channel in
+                    if client.logger.logLevel <= .debug {
+                        do {
+                            try channel.pipeline.syncOperations.addHandler(WireLoggingHandler(logger: client.logger), position: .first)
+                        } catch {
+                            return channel.eventLoop.makeFailedFuture(error)
+                        }
+                    }
                     // Work out what handlers to add
                     let handlers: [ChannelHandler] = [
                         MQTTMessageHandler(client, pingInterval: pingInterval),
@@ -177,9 +184,20 @@ final class MQTTConnection {
         let websocketUpgrader = NIOWebSocketClientUpgrader(
             requestKey: Data(requestKey).base64EncodedString(),
             maxFrameSize: client.configuration.webSocketMaxFrameSize
-        ) { channel, _ in
+        ) { channel, responseHead in
+            // Logged at info: the response headers name the proxy in front of the server, and the
+            // frame limit is what an oversized frame is checked against.
+            client.logger.info(
+                "WebSocket upgrade accepted",
+                metadata: [
+                    "ws_status": "\(responseHead.status.code)",
+                    "ws_http_version": "\(responseHead.version)",
+                    "ws_headers": "\(responseHead.headers.map { "\($0.name): \($0.value)" }.joined(separator: " | "))",
+                    "ws_max_frame_size": "\(client.configuration.webSocketMaxFrameSize)",
+                ]
+            )
             let future = channel.eventLoop.makeCompletedFuture {
-                try channel.pipeline.syncOperations.addHandler(WebSocketHandler())
+                try channel.pipeline.syncOperations.addHandler(WebSocketHandler(logger: client.logger))
                 try afterHandlerAdded()
             }
             future.cascade(to: promise)

@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+import Logging
 import NIO
 import NIOWebSocket
 
@@ -32,6 +33,14 @@ final class WebSocketHandler: ChannelDuplexHandler {
     var webSocketFrameSequence: WebSocketFrameSequence?
     var waitingOnPong: Bool = false
     var pingInterval: TimeAmount?
+    /// Logs every frame when set at debug level.
+    let logger: Logger?
+    private var framesInMessage = 0
+    private var frameCount = 0
+
+    init(logger: Logger? = nil) {
+        self.logger = logger
+    }
 
     /// Write bytebuffer as WebSocket frame
     func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
@@ -44,6 +53,20 @@ final class WebSocketHandler: ChannelDuplexHandler {
     /// Read WebSocket frame
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let frame = self.unwrapInboundIn(data)
+        self.frameCount += 1
+        self.framesInMessage += 1
+        self.logger?.debug(
+            "WebSocket frame in",
+            metadata: [
+                "ws_opcode": "\(frame.opcode)",
+                "ws_fin": "\(frame.fin)",
+                "ws_bytes": "\(frame.length)",
+                "ws_frame": "\(self.frameCount)",
+                "ws_frame_in_message": "\(self.framesInMessage)",
+                "ws_message_bytes_so_far": "\((self.webSocketFrameSequence?.buffer.readableBytes ?? 0) + frame.length)",
+                "ws_rsv": "\(frame.rsv1)\(frame.rsv2)\(frame.rsv3)",
+            ]
+        )
 
         switch frame.opcode {
         case .pong:
@@ -73,6 +96,7 @@ final class WebSocketHandler: ChannelDuplexHandler {
                 frameSeq.append(frame)
                 self.webSocketFrameSequence = frameSeq
             } else {
+                self.logger?.error("WebSocket: continuation frame with no message in progress")
                 self.close(context: context, code: .protocolError, promise: nil)
             }
         case .connectionClose:
@@ -82,6 +106,11 @@ final class WebSocketHandler: ChannelDuplexHandler {
         }
 
         if let frameSeq = self.webSocketFrameSequence, frame.fin {
+            self.logger?.debug(
+                "WebSocket message complete",
+                metadata: ["ws_message_bytes": "\(frameSeq.buffer.readableBytes)", "ws_frames": "\(self.framesInMessage)", "ws_type": "\(frameSeq.type)"]
+            )
+            self.framesInMessage = 0
             switch frameSeq.type {
             case .binary, .text:
                 context.fireChannelRead(wrapInboundOut(frameSeq.buffer))
@@ -111,6 +140,7 @@ final class WebSocketHandler: ChannelDuplexHandler {
         }
         if self.waitingOnPong {
             // We never received a pong from our last ping, so the connection has timed out
+            self.logger?.error("WebSocket: no pong received, closing")
             let promise = context.eventLoop.makePromise(of: Void.self)
             self.close(context: context, code: .unknown(1006), promise: promise)
             promise.futureResult.whenComplete { _ in
@@ -136,6 +166,7 @@ final class WebSocketHandler: ChannelDuplexHandler {
         guard let frameDataString = frameData.readString(length: Self.pingData.count),
             frameDataString == Self.pingData
         else {
+            self.logger?.error("WebSocket: unexpected pong payload, closing")
             self.close(context: context, code: .goingAway, promise: nil)
             return
         }
@@ -147,6 +178,7 @@ final class WebSocketHandler: ChannelDuplexHandler {
         if frame.fin {
             self.send(context: context, buffer: frame.unmaskedData, opcode: .pong, fin: true, promise: nil)
         } else {
+            self.logger?.error("WebSocket: fragmented ping, closing")
             self.close(context: context, code: .protocolError, promise: nil)
         }
     }
@@ -158,6 +190,10 @@ final class WebSocketHandler: ChannelDuplexHandler {
         var data = frame.unmaskedData
         let code = data.readWebSocketErrorCode()
         let reason = data.readString(length: data.readableBytes) ?? ""
+        self.logger?.warning(
+            "WebSocket: close frame received",
+            metadata: ["ws_close_code": "\(code.map { "\(UInt16(webSocketErrorCode: $0))" } ?? "none")", "ws_close_reason": "\(reason)"]
+        )
         context.fireUserInboundEventTriggered(WebSocketPeerClose(code: code, reason: reason))
         self.isClosed = true
         context.close(promise: nil)
@@ -176,6 +212,12 @@ final class WebSocketHandler: ChannelDuplexHandler {
             return
         }
         self.isClosed = true
+        // 1006 is the bookkeeping close of a channel that already went down, not a decision to close.
+        self.logger?.log(
+            level: UInt16(webSocketErrorCode: code) == 1006 ? .debug : .warning,
+            "WebSocket: sending close frame",
+            metadata: ["ws_close_code": "\(UInt16(webSocketErrorCode: code))", "ws_channel_active": "\(context.channel.isActive)"]
+        )
 
         let codeAsInt = UInt16(webSocketErrorCode: code)
         let codeToSend: WebSocketErrorCode
@@ -193,6 +235,14 @@ final class WebSocketHandler: ChannelDuplexHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        self.logger?.debug(
+            "WebSocket: channel inactive",
+            metadata: [
+                "ws_frames": "\(self.frameCount)",
+                "ws_message_in_progress_bytes": "\(self.webSocketFrameSequence?.buffer.readableBytes ?? 0)",
+                "ws_already_closed": "\(self.isClosed)",
+            ]
+        )
         self.close(context: context, code: .unknown(1006), promise: nil)
 
         // We always forward the error on to let others see it.
@@ -206,6 +256,7 @@ final class WebSocketHandler: ChannelDuplexHandler {
         } else {
             errorCode = .unexpectedServerError
         }
+        self.logger?.error("WebSocket: error caught", metadata: ["mqtt_error": "\(error)"])
         self.close(context: context, code: errorCode, promise: nil)
 
         // We always forward the error on to let others see it.

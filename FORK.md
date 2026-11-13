@@ -32,3 +32,8 @@ mistaken for upstream's. Consumers pin with `exact:`, since every fork release i
    (an error caught on the channel, a WebSocket close frame from the peer with its code and reason, a
    drop by the peer or the network, or a close asked by the client) and is a warning unless the
    client asked for the close. (`2.13.0-fork.3`)
+4. The WebSocket link is logged: the upgrade response (status, headers, frame size limit) at info,
+   close frames sent or received with their code at warning, and WebSocket errors at error. At
+   debug, every frame and every read or write on the socket is logged, and at trace every MQTT
+   packet with its topic, QoS, payload size and properties, so a dropped connection can be traced
+   to what crossed the wire just before. (`2.13.0-fork.4`)

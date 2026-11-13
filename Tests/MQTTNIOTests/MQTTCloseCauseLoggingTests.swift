@@ -27,6 +27,16 @@ final class MQTTCloseCauseLoggingTests: XCTestCase {
         XCTAssertEqual(closed.level, .warning)
         XCTAssertEqual(closed.metadata["mqtt_close_cause"], "error: invalidFrameLength")
         XCTAssertTrue(records.contains { $0.message == "MQTT channel error" && $0.level == .error && $0.metadata["mqtt_error"] == "invalidFrameLength" })
+
+        // The upgrade response and the frame limit are logged, to tell which proxy answered and
+        // what the oversized frame was checked against.
+        let upgrade = try XCTUnwrap(records.first { $0.message == "WebSocket upgrade accepted" })
+        XCTAssertEqual(upgrade.level, .info)
+        XCTAssertEqual(upgrade.metadata["ws_status"], "101")
+        XCTAssertEqual(upgrade.metadata["ws_max_frame_size"], "16384")
+        // The client answers an oversized frame with close code 1009 before closing.
+        XCTAssertTrue(records.contains { $0.message == "WebSocket: sending close frame" && $0.metadata["ws_close_code"] == "1009" })
+        XCTAssertTrue(records.contains { $0.message == "Wire: close asked by the client side" })
     }
 
     func testFrameUnderTheConfiguredLimitIsAccepted() throws {

@@ -52,7 +52,14 @@ class MQTTMessageHandler: ChannelDuplexHandler {
 
     func write(context: ChannelHandlerContext, data: NIOAny, promise: EventLoopPromise<Void>?) {
         let message = unwrapOutboundIn(data)
-        self.client.logger.trace("MQTT Out", metadata: ["mqtt_message": .string("\(message)"), "mqtt_packet_id": .string("\(message.packetId)")])
+        self.client.logger.trace(
+            "MQTT Out",
+            metadata: [
+                "mqtt_message": .string("\(message)"),
+                "mqtt_packet_id": .string("\(message.packetId)"),
+                "mqtt_details": .string(Self.wireDetails(of: message)),
+            ]
+        )
         var bb = context.channel.allocator.buffer(capacity: 0)
         do {
             try message.write(version: self.client.configuration.version, to: &bb)
@@ -65,6 +72,7 @@ class MQTTMessageHandler: ChannelDuplexHandler {
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let buffer = self.unwrapInboundIn(data)
+        self.client.logger.trace("MQTT bytes in", metadata: ["mqtt_bytes": "\(buffer.readableBytes)"])
 
         do {
             try self.decoder.process(buffer: buffer) { message in
@@ -78,6 +86,7 @@ class MQTTMessageHandler: ChannelDuplexHandler {
                             "mqtt_message": .stringConvertible(publishMessage),
                             "mqtt_packet_id": .stringConvertible(publishMessage.packetId),
                             "mqtt_topicName": .string(publishMessage.publish.topicName),
+                            "mqtt_details": .string(Self.wireDetails(of: publishMessage)),
                         ]
                     )
                     self.respondToPublish(publishMessage)
@@ -104,7 +113,11 @@ class MQTTMessageHandler: ChannelDuplexHandler {
                 }
                 self.client.logger.trace(
                     "MQTT In",
-                    metadata: ["mqtt_message": .stringConvertible(message), "mqtt_packet_id": .stringConvertible(message.packetId)]
+                    metadata: [
+                        "mqtt_message": .stringConvertible(message),
+                        "mqtt_packet_id": .stringConvertible(message.packetId),
+                        "mqtt_details": .string(Self.wireDetails(of: message)),
+                    ]
                 )
             }
         } catch {
@@ -112,6 +125,38 @@ class MQTTMessageHandler: ChannelDuplexHandler {
             context.close(promise: nil)
             self.client.logger.error("Error processing MQTT message", metadata: ["mqtt_error": .string("\(error)")])
         }
+    }
+
+    /// What a packet carries besides its type, for the trace log. Payloads are reported by size only.
+    static func wireDetails(of message: MQTTPacket) -> String {
+        switch message {
+        case let packet as MQTTPublishPacket:
+            let publish = packet.publish
+            return
+                "topic=\(publish.topicName) qos=\(publish.qos.rawValue) dup=\(publish.dup) retain=\(publish.retain) payload_bytes=\(publish.payload.readableBytes) properties=\(Self.describe(publish.properties))"
+        case let packet as MQTTPubAckPacket:
+            return "reason=\(packet.reason) properties=\(Self.describe(packet.properties))"
+        case let packet as MQTTSubAckPacket:
+            return "reasons=\(packet.reasons) properties=\(Self.describe(packet.properties))"
+        case let packet as MQTTConnAckPacket:
+            return "return_code=\(packet.returnCode) flags=\(packet.acknowledgeFlags) properties=\(Self.describe(packet.properties))"
+        case let packet as MQTTDisconnectPacket:
+            return "reason=\(packet.reason) properties=\(Self.describe(packet.properties))"
+        default:
+            return ""
+        }
+    }
+
+    /// Properties with binary values reported by size, so correlation data does not flood the log.
+    private static func describe(_ properties: MQTTProperties) -> String {
+        let items = properties.map { property -> String in
+            switch property {
+            case .correlationData(let buffer): return "correlationData(\(buffer.readableBytes) bytes)"
+            case .authenticationData(let buffer): return "authenticationData(\(buffer.readableBytes) bytes)"
+            default: return "\(property)"
+            }
+        }
+        return "[" + items.joined(separator: ", ") + "]"
     }
 
     func updatePingreqTimeout(_ timeout: TimeAmount) {
